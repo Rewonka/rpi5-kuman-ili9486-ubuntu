@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_VERSION="$(uname -r)"
-MODULE_DIR="/lib/modules/${KERNEL_VERSION}/updates"
+MODULES_ROOT="${MODULES_ROOT:-/lib/modules}"
+MODULE_DIR="${MODULES_ROOT}/${KERNEL_VERSION}/updates"
 MODULE_PATH="${MODULE_DIR}/ili9486.ko"
+CHECKSUM_PATH="${MODULE_DIR}/ili9486.ko.sha256"
 
 echo "======================================"
 echo " Kuman ILI9486 - Driver Rollback"
@@ -12,6 +15,10 @@ echo
 echo "Kernel: ${KERNEL_VERSION}"
 echo "Module: ${MODULE_PATH}"
 echo
+
+source "$ROOT/scripts/lib/safety.sh"
+validate_modules_root || exit 1
+validate_module_path "$KERNEL_VERSION" || exit 1
 
 if [[ ! -f "${MODULE_PATH}" ]]; then
     echo "No custom ILI9486 module found."
@@ -22,6 +29,26 @@ fi
 echo "Custom driver detected."
 echo
 
+if [[ ! -f "${CHECKSUM_PATH}" ]]; then
+    echo "ERROR: Installation checksum is missing."
+    echo "Refusing to remove a module of unknown origin."
+    exit 1
+fi
+
+EXPECTED="$(cat "${CHECKSUM_PATH}")"
+ACTUAL="$(sha256sum "${MODULE_PATH}" | awk '{print $1}')"
+
+if [[ "${EXPECTED}" != "${ACTUAL}" ]]; then
+    echo "ERROR: Module checksum mismatch."
+    echo "Refusing to remove a modified or unknown module."
+    exit 1
+fi
+
+echo "Module checksum verified."
+echo
+
+
+
 if [[ "${1:-}" != "--apply" ]]; then
     echo "DRY RUN - no changes made."
     echo
@@ -30,8 +57,13 @@ if [[ "${1:-}" != "--apply" ]]; then
     exit 0
 fi
 
-if [[ "${EUID}" -ne 0 ]]; then
+if [[ "$TEST_MODE" -eq 0 && "${EUID}" -ne 0 ]]; then
     echo "ERROR: Run with sudo."
+    exit 1
+fi
+
+if [[ "$TEST_MODE" -eq 1 && "${EUID}" -eq 0 ]]; then
+    echo "ERROR: Test rollback must run without sudo."
     exit 1
 fi
 
@@ -41,14 +73,22 @@ if [[ "${KERNEL_VERSION}" != *raspi* ]]; then
 fi
 
 echo "Removing custom ILI9486 module..."
-rm -- "${MODULE_PATH}"
+rm -- "${MODULE_PATH}" "${CHECKSUM_PATH}"
 
 echo "Updating module dependency database..."
-depmod -a "${KERNEL_VERSION}"
+if [[ "$TEST_MODE" -eq 0 ]]; then
+    depmod -a "${KERNEL_VERSION}"
+else
+    echo "TEST MODE: Skipping depmod."
+fi
 
 echo
 echo "Selected ILI9486 module:"
-modprobe --show-depends ili9486 | grep 'ili9486\.ko' || true
+if [[ "$TEST_MODE" -eq 0 ]]; then
+    modprobe --show-depends ili9486 | grep 'ili9486\.ko' || true
+else
+    echo "TEST MODE: No system module lookup performed."
+fi
 
 echo
 echo "Rollback prepared successfully."

@@ -5,10 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL="$(uname -r)"
 BUILD_DIR="$ROOT/build"
 WORK_DIR="$BUILD_DIR/kernel-source"
-DRIVER_DIR="$BUILD_DIR/ili9486"
+DRIVER_DIR="$BUILD_DIR/$KERNEL/ili9486"
 PATCH_FILE="$ROOT/patches/ili9486-30hz.patch"
 MODULE="$DRIVER_DIR/ili9486.ko"
-DEST="/lib/modules/$KERNEL/updates/ili9486.ko"
+MODULES_ROOT="${MODULES_ROOT:-/lib/modules}"
+DEST="${MODULES_ROOT}/${KERNEL}/updates/ili9486.ko"
 
 usage() {
     echo "Usage:"
@@ -160,10 +161,21 @@ MAKEFILE
 }
 
 install_module() {
-    [[ "$EUID" -eq 0 ]] || {
+    source "$ROOT/scripts/lib/safety.sh"
+    validate_modules_root || exit 1
+    validate_module_path "$KERNEL" || exit 1
+
+    local test_mode="$TEST_MODE"
+
+    if [[ "$test_mode" -eq 0 && "$EUID" -ne 0 ]]; then
         echo "ERROR: Installation requires sudo."
         exit 1
-    }
+    fi
+
+    if [[ "$test_mode" -eq 1 && "$EUID" -eq 0 ]]; then
+        echo "ERROR: Test installation must run without sudo."
+        exit 1
+    fi
 
     check_kernel
 
@@ -190,12 +202,38 @@ install_module() {
 
     echo "Installing patched ILI9486 module..."
 
+    local checksum_path="${DEST}.sha256"
+    local checksum
+
+    checksum="$(sha256sum "$MODULE" | awk '{print $1}')"
+
     install -D -m 644 "$MODULE" "$DEST"
-    depmod -a "$KERNEL"
+
+    if ! printf '%s\n' "$checksum" > "$checksum_path"; then
+        echo "ERROR: Failed to write module checksum." >&2
+        rm -f -- "$DEST" "$checksum_path"
+
+        if [[ "$test_mode" -eq 0 ]]; then
+            depmod -a "$KERNEL"
+        fi
+
+        exit 1
+    fi
+
+    if [[ "$test_mode" -eq 0 ]]; then
+        depmod -a "$KERNEL"
+    else
+        echo "TEST MODE: Skipping depmod."
+    fi
 
     echo
-    echo "Selected module:"
-    modprobe --show-depends ili9486 | grep 'ili9486\.ko' || true
+    if [[ "$test_mode" -eq 0 ]]; then
+        echo "Selected module:"
+        modprobe --show-depends ili9486 | grep 'ili9486\.ko' || true
+    else
+        echo "TEST MODE: Module installed into test directory."
+        echo "Path: $DEST"
+    fi
 
     echo
     echo "Installation completed."
