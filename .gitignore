@@ -1,0 +1,29 @@
+# Ubuntu kernel source archives
+linux-raspi_*
+linux-meta-raspi_*
+
+# Extracted Ubuntu kernel sources
+linux-raspi-*/
+
+# Kernel build artifacts
+*.o
+*.ko
+*.ko.*
+*.mod
+*.mod.c
+*.cmd
+*.symvers
+modules.order
+Module.symvers
+
+# Temporary files
+*.log
+*.bak
+*~
+
+# Local module backups
+backup/
+
+# Local build directories
+build/
+*.md.bak
